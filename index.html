@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Gesture Piano FINAL</title>
+  <style>
+    body {
+      text-align: center;
+      font-family: Arial;
+      background: #111;
+      color: white;
+    }
+    video, canvas {
+      border: 2px solid white;
+      border-radius: 10px;
+    }
+    button {
+      padding: 10px 20px;
+      margin: 8px;
+      font-size: 16px;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+
+<h2>🎹 Gesture Piano (FINAL PRO)</h2>
+
+<!-- CAMERA -->
+<button onclick="startCamera()">📷 Camera ON</button>
+<button onclick="stopCamera()">⏹ Camera OFF</button>
+
+<br>
+
+<!-- SERIAL -->
+<button onclick="connectSerial()">🔌 Connect Arduino</button>
+<button onclick="changePort()">🔄 Change Port</button>
+<button onclick="disconnectSerial()">❌ Disconnect</button>
+
+<h3 id="status">Status: Idle</h3>
+<h2 id="count">Fingers: 0</h2>
+
+<video id="video" width="640" height="480" autoplay playsinline></video>
+<canvas id="canvas" width="640" height="480"></canvas>
+
+<!-- MediaPipe -->
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+
+<script>
+const video = document.getElementById("video");
+const canvas = document.getElementById("canvas");
+const ctx = canvas.getContext("2d");
+
+let camera = null;
+let lastCount = -1;
+
+// ===== SERIAL =====
+let port = null;
+let writer = null;
+
+async function connectSerial() {
+  try {
+    port = await navigator.serial.requestPort();
+    await port.open({ baudRate: 9600 });
+
+    writer = port.writable.getWriter();
+
+    document.getElementById("status").innerText = "Serial Connected ✅";
+  } catch (err) {
+    alert("Serial error: " + err);
+  }
+}
+
+// 🔄 CHANGE PORT (LIVE)
+async function changePort() {
+  await disconnectSerial();
+  await connectSerial();
+}
+
+// ❌ DISCONNECT
+async function disconnectSerial() {
+  try {
+    if (writer) {
+      writer.releaseLock();
+      writer = null;
+    }
+    if (port) {
+      await port.close();
+      port = null;
+    }
+    document.getElementById("status").innerText = "Serial Disconnected ❌";
+  } catch (err) {
+    console.log(err);
+  }
+}
+
+// ===== SOUND =====
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+function playNote(note) {
+  let freq = 440 * Math.pow(2, (note - 69) / 12);
+
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+
+  osc.frequency.value = freq;
+  osc.type = "triangle";
+
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+
+  gain.gain.setValueAtTime(0, audioCtx.currentTime);
+  gain.gain.linearRampToValueAtTime(0.5, audioCtx.currentTime + 0.01);
+  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.5);
+
+  osc.start();
+  osc.stop(audioCtx.currentTime + 0.5);
+}
+
+// ===== FINGER COUNT =====
+function countFingers(landmarks, handedness) {
+  let fingers = [];
+
+  if (handedness === "Right") {
+    fingers.push(landmarks[4].x < landmarks[3].x ? 1 : 0);
+  } else {
+    fingers.push(landmarks[4].x > landmarks[3].x ? 1 : 0);
+  }
+
+  let tips = [8, 12, 16, 20];
+  for (let i = 0; i < 4; i++) {
+    fingers.push(
+      landmarks[tips[i]].y < landmarks[tips[i] - 2].y ? 1 : 0
+    );
+  }
+
+  return fingers.reduce((a, b) => a + b, 0);
+}
+
+// ===== MEDIAPIPE =====
+const hands = new Hands({
+  locateFile: (file) =>
+    `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+});
+
+hands.setOptions({
+  maxNumHands: 1,
+  modelComplexity: 1,
+  minDetectionConfidence: 0.8,
+  minTrackingConfidence: 0.8
+});
+
+hands.onResults(async (results) => {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+  if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+
+    const landmarks = results.multiHandLandmarks[0];
+    const handedness = results.multiHandedness[0].label;
+
+    // Draw hand
+    drawConnectors(ctx, landmarks, HAND_CONNECTIONS, {color: 'lime'});
+    drawLandmarks(ctx, landmarks, {color: 'red'});
+
+    let count = countFingers(landmarks, handedness);
+
+    document.getElementById("count").innerText =
+      `Fingers: ${count} (${handedness})`;
+
+    if (count !== lastCount) {
+      let note = 60 + count;
+
+      playNote(note);
+
+      // 🔌 send to Arduino
+      if (writer) {
+        let data = new TextEncoder().encode(count + "\n");
+        await writer.write(data);
+      }
+
+      lastCount = count;
+    }
+
+  } else {
+    document.getElementById("count").innerText = "No hand detected ❌";
+  }
+});
+
+// ===== CAMERA =====
+function startCamera() {
+  camera = new Camera(video, {
+    onFrame: async () => {
+      await hands.send({ image: video });
+    },
+    width: 640,
+    height: 480
+  });
+
+  camera.start();
+  document.getElementById("status").innerText = "Camera Running 📷";
+}
+
+function stopCamera() {
+  if (camera) {
+    camera.stop();
+    camera = null;
+  }
+  document.getElementById("status").innerText = "Camera Stopped ⏹";
+}
+</script>
+
+</body>
+</html>
