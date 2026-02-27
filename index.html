@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>gueture controlled LED</title>
+  <title>Gesture Control</title>
   <style>
     body {
       text-align: center;
@@ -25,7 +25,7 @@
 </head>
 <body>
 
-<h2>Gesture Controlled LED</h2>
+<h2>✋ Gesture Control</h2>
 
 <!-- CAMERA -->
 <button onclick="startCamera()">📷 Camera ON</button>
@@ -55,7 +55,6 @@ const canvas = document.getElementById("canvas");
 const ctx = canvas.getContext("2d");
 
 let camera = null;
-let lastCount = -1;
 
 // ===== SERIAL =====
 let port = null;
@@ -74,13 +73,11 @@ async function connectSerial() {
   }
 }
 
-// 🔄 CHANGE PORT (LIVE)
 async function changePort() {
   await disconnectSerial();
   await connectSerial();
 }
 
-// ❌ DISCONNECT
 async function disconnectSerial() {
   try {
     if (writer) {
@@ -97,39 +94,18 @@ async function disconnectSerial() {
   }
 }
 
-// ===== SOUND =====
-const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-
-function playNote(note) {
-  let freq = 440 * Math.pow(2, (note - 69) / 12);
-
-  const osc = audioCtx.createOscillator();
-  const gain = audioCtx.createGain();
-
-  osc.frequency.value = freq;
-  osc.type = "triangle";
-
-  osc.connect(gain);
-  gain.connect(audioCtx.destination);
-
-  gain.gain.setValueAtTime(0, audioCtx.currentTime);
-  gain.gain.linearRampToValueAtTime(0.5, audioCtx.currentTime + 0.01);
-  gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.5);
-
-  osc.start();
-  osc.stop(audioCtx.currentTime + 0.5);
-}
-
 // ===== FINGER COUNT =====
 function countFingers(landmarks, handedness) {
   let fingers = [];
 
+  // Thumb
   if (handedness === "Right") {
     fingers.push(landmarks[4].x < landmarks[3].x ? 1 : 0);
   } else {
     fingers.push(landmarks[4].x > landmarks[3].x ? 1 : 0);
   }
 
+  // Other fingers
   let tips = [8, 12, 16, 20];
   for (let i = 0; i < 4; i++) {
     fingers.push(
@@ -153,6 +129,7 @@ hands.setOptions({
   minTrackingConfidence: 0.8
 });
 
+// 🔥 MAIN FIXED LOOP
 hands.onResults(async (results) => {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
@@ -171,23 +148,24 @@ hands.onResults(async (results) => {
     document.getElementById("count").innerText =
       `Fingers: ${count} (${handedness})`;
 
-    if (count !== lastCount) {
-      let note = 60 + count;
-
-      playNote(note);
-
-      // 🔌 send to Arduino
-      if (writer) {
-        let data = new TextEncoder().encode(count + "\n");
-        await writer.write(data);
-      }
-
-      lastCount = count;
+    // ✅ ALWAYS SEND (FIXED)
+    if (writer) {
+      let data = new TextEncoder().encode(count + "\n");
+      await writer.write(data);
     }
 
   } else {
     document.getElementById("count").innerText = "No hand detected ❌";
+
+    // ✅ SEND 0 WHEN NO HAND
+    if (writer) {
+      let data = new TextEncoder().encode("0\n");
+      await writer.write(data);
+    }
   }
+
+  // ⚡ small delay for stability
+  await new Promise(r => setTimeout(r, 50));
 });
 
 // ===== CAMERA =====
@@ -214,5 +192,4 @@ function stopCamera() {
 </script>
 
 </body>
-
 </html>
